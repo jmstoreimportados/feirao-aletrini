@@ -9,8 +9,23 @@
    Só depois disso a chave de administrador é usada.
    ============================================================ */
 
-const URL_SB   = process.env.SUPABASE_URL;
-const SERVICE  = process.env.SUPABASE_SERVICE_ROLE;
+function limpaUrl(v) {
+  let u = (v || "").trim().replace(/[\r\n]/g, "");
+  if (!u) return "";
+  if (!/^https?:\/\//i.test(u)) u = "https://" + u;   // colaram sem o https://
+  return u.replace(/\/+$/, "");                        // barra sobrando no fim
+}
+const URL_SB  = limpaUrl(process.env.SUPABASE_URL);
+const SERVICE = (process.env.SUPABASE_SERVICE_ROLE || "").trim().replace(/[\r\n\s]/g, "");
+
+/* lê o "role" de dentro do token, só para diagnóstico — não expõe a chave */
+function papelDaChave(jwt) {
+  try {
+    const meio = jwt.split(".")[1];
+    const json = JSON.parse(Buffer.from(meio, "base64").toString("utf8"));
+    return json.role || "?";
+  } catch (e) { return "?"; }
+}
 
 async function sb(caminho, opcoes = {}) {
   const r = await fetch(URL_SB + caminho, {
@@ -39,9 +54,15 @@ async function quemChama(req) {
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   if (!token) return null;
 
-  const r = await fetch(URL_SB + "/auth/v1/user", {
-    headers: { apikey: SERVICE, Authorization: "Bearer " + token }
-  });
+  let r;
+  try {
+    r = await fetch(URL_SB + "/auth/v1/user", {
+      headers: { apikey: SERVICE, Authorization: "Bearer " + token }
+    });
+  } catch (e) {
+    const err = new Error("não alcancei o Supabase em " + URL_SB + " (" + e.message + ")");
+    err.status = 502; throw err;
+  }
   if (!r.ok) return null;
   const user = await r.json();
   if (!user || !user.id) return null;
@@ -52,6 +73,25 @@ async function quemChama(req) {
 }
 
 module.exports = async function handler(req, res) {
+  /* GET = diagnóstico da configuração. Não devolve a chave, só o formato dela. */
+  if (req.method === "GET") {
+    let alcanca = null;
+    if (URL_SB) {
+      try {
+        const t = await fetch(URL_SB + "/auth/v1/settings", { headers: { apikey: SERVICE } });
+        alcanca = t.status;
+      } catch (e) { alcanca = "falhou: " + e.message; }
+    }
+    return res.status(200).json({
+      SUPABASE_URL: URL_SB || "FALTANDO",
+      SUPABASE_SERVICE_ROLE: SERVICE
+        ? SERVICE.length + " caracteres, role=" + papelDaChave(SERVICE)
+        : "FALTANDO",
+      alcanca_supabase: alcanca,
+      esperado: "role=service_role e alcanca_supabase=200"
+    });
+  }
+
   if (req.method !== "POST") return res.status(405).json({ erro: "método não permitido" });
   if (!URL_SB || !SERVICE) {
     return res.status(500).json({ erro: "Faltam as variáveis SUPABASE_URL e SUPABASE_SERVICE_ROLE na Vercel." });
@@ -59,7 +99,12 @@ module.exports = async function handler(req, res) {
 
   let chamador;
   try { chamador = await quemChama(req); }
-  catch (e) { return res.status(500).json({ erro: "não consegui validar a sessão" }); }
+  catch (e) {
+    return res.status(e.status || 500).json({
+      erro: "não consegui validar a sessão: " + (e.message || e),
+      dica: "Abra /api/usuarios no navegador para ver o diagnóstico da configuração."
+    });
+  }
 
   if (!chamador) return res.status(401).json({ erro: "sessão inválida" });
   if (chamador.papel !== "master") return res.status(403).json({ erro: "só o master gerencia usuários" });
