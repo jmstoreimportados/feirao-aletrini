@@ -14,5 +14,12 @@ window.CONFIG = {
   TITULO: "Concorra ao brinde",
   BRINDE: "uma Alexa",
   RESULTADO: "",           // ex.: "Domingo, 30/08, às 17h, no estande."
-  WHATSAPP_LOJA: "1999214110"
+  WHATSAPP_LOJA: "1999214110",
+
+  // Meta de cadastros por dia — aparece como barra de progresso no painel
+  META_DIA: 60,
+
+  // Mensagem que abre no WhatsApp ao clicar em "Chamar no WhatsApp".
+  // {nome} vira o primeiro nome, {cupom} vira o número do cupom.
+  MSG_WHATSAPP: "Oi {nome}! Aqui é da Aletrini Multimarcas. Você pegou o cupom {cupom} no nosso feirão no Boulevard Rio. Posso te mostrar as condições que a gente fechou pra quem participou?"
 };

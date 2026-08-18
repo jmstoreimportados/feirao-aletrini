@@ -33,19 +33,19 @@
 </div>
 
 <div class="wrap wide hide" id="tela-painel">
-  <div class="row" style="align-items:center;justify-content:space-between">
-    <div style="flex:1 1 auto">
-      <div style="font-family:var(--f-display);font-style:italic;text-transform:uppercase;
-                  font-size:22px;letter-spacing:.05em">Painel</div>
-      <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3)"
-           id="quem"></div>
+  <div class="topo">
+    <div>
+      <div class="marca-painel">Painel</div>
+      <div class="quem" id="quem"></div>
     </div>
-    <button class="btn ghost" id="sair" style="flex:none">Sair</button>
+    <div class="row" style="flex:none;gap:8px;align-items:center">
+      <span class="ao-vivo"><i></i><span id="frescor">agora</span></span>
+      <button class="btn ghost" id="sair" style="flex:none">Sair</button>
+    </div>
   </div>
   <div class="tabs" id="tabs" role="tablist"></div>
   <div id="painel"></div>
-  <p class="foot">Os cadastros ficam no banco de dados, não neste aparelho.
-     A lista atualiza sozinha a cada 30 segundos.</p>
+  <p class="foot">Os cadastros ficam no banco, não neste aparelho. A lista atualiza sozinha a cada 20 segundos.</p>
 </div>
 
 <script src="config.js"></script>
@@ -56,32 +56,49 @@ const $ = s => document.querySelector(s);
 const el = (t,c,x) => { const n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n; };
 const digits = s => (s||"").replace(/\D/g,"");
 const pad4 = n => String(n).padStart(4,"0");
+const STATUS = ["novo","contatado","agendado","vendido","perdido"];
+const META_DIA = C.META_DIA || 60;
+
 function maskTel(v){
   const d = digits(v);
   if(d.length<=10) return "("+d.slice(0,2)+") "+d.slice(2,6)+"-"+d.slice(6);
   return "("+d.slice(0,2)+") "+d.slice(2,7)+"-"+d.slice(7);
 }
-function dataHora(iso){
-  const d = new Date(iso), p = n => String(n).padStart(2,"0");
-  return p(d.getDate())+"/"+p(d.getMonth()+1)+"/"+d.getFullYear()+" "+p(d.getHours())+":"+p(d.getMinutes());
-}
+const p2 = n => String(n).padStart(2,"0");
+const dataHora = iso => { const d=new Date(iso);
+  return p2(d.getDate())+"/"+p2(d.getMonth()+1)+" "+p2(d.getHours())+":"+p2(d.getMinutes()); };
+const soHora  = iso => { const d=new Date(iso); return p2(d.getHours())+":"+p2(d.getMinutes()); };
+const mesmoDia = (a,b) => a.getDate()===b.getDate() && a.getMonth()===b.getMonth() && a.getFullYear()===b.getFullYear();
 
 /* ---------------- sessão ---------------- */
 let sessao = JSON.parse(sessionStorage.getItem("feirao_sessao") || "null");
-let papel = "nenhum";
-let leads = [], ganhadores = [];
+let papel = "nenhum", leads = [], ganhadores = [], temStatus = true, ultimaCarga = null;
 
-const api = async (caminho, opcoes = {}) => {
-  const h = Object.assign({
-    "apikey": C.SUPABASE_KEY,
-    "Content-Type": "application/json"
-  }, opcoes.headers || {});
+async function renovar(){
+  if(!sessao || !sessao.refresh_token) return false;
+  try{
+    const r = await fetch(C.SUPABASE_URL + "/auth/v1/token?grant_type=refresh_token", {
+      method:"POST", headers:{ "apikey":C.SUPABASE_KEY, "Content-Type":"application/json" },
+      body: JSON.stringify({ refresh_token: sessao.refresh_token })
+    });
+    if(!r.ok) return false;
+    sessao = await r.json();
+    sessionStorage.setItem("feirao_sessao", JSON.stringify(sessao));
+    return true;
+  }catch(e){ return false; }
+}
+
+async function api(caminho, opcoes = {}, jaTentou){
+  const h = Object.assign({ "apikey": C.SUPABASE_KEY, "Content-Type": "application/json" }, opcoes.headers || {});
   if(sessao && sessao.access_token) h["Authorization"] = "Bearer " + sessao.access_token;
   const r = await fetch(C.SUPABASE_URL + caminho, Object.assign({}, opcoes, {headers: h}));
-  if(r.status === 401){ deslogar(); throw new Error("sessao expirada"); }
+  if(r.status === 401 && !jaTentou){
+    if(await renovar()) return api(caminho, opcoes, true);
+    deslogar(); throw new Error("sessao expirada");
+  }
   if(!r.ok) throw new Error(await r.text());
   return r.status === 204 ? null : r.json();
-};
+}
 
 function deslogar(){
   sessao = null; sessionStorage.removeItem("feirao_sessao");
@@ -94,16 +111,14 @@ $("#lg-email").addEventListener("keydown", e => { if(e.key==="Enter") $("#lg-sen
 $("#lg-senha").addEventListener("keydown", e => { if(e.key==="Enter") entrar(); });
 
 async function entrar(){
-  const m = $("#lg-msg");
-  m.className = "msg err";
+  const m = $("#lg-msg"); m.className = "msg err";
   if(!C.SUPABASE_URL || C.SUPABASE_URL.indexOf("COLE_AQUI")===0){
     m.textContent = "O site ainda não foi configurado (config.js)."; m.className="msg err on"; return;
   }
   const btn = $("#lg-entrar"); btn.disabled = true; btn.textContent = "Entrando...";
   try{
     const r = await fetch(C.SUPABASE_URL + "/auth/v1/token?grant_type=password", {
-      method:"POST",
-      headers:{ "apikey": C.SUPABASE_KEY, "Content-Type":"application/json" },
+      method:"POST", headers:{ "apikey": C.SUPABASE_KEY, "Content-Type":"application/json" },
       body: JSON.stringify({ email: $("#lg-email").value.trim(), password: $("#lg-senha").value })
     });
     if(!r.ok) throw new Error("login");
@@ -113,44 +128,52 @@ async function entrar(){
     await abrirPainel();
   }catch(e){
     m.textContent = "E-mail ou senha incorretos."; m.className = "msg err on";
-  }finally{
-    btn.disabled = false; btn.textContent = "Entrar";
-  }
+  }finally{ btn.disabled = false; btn.textContent = "Entrar"; }
 }
 $("#sair").onclick = deslogar;
 
 /* ---------------- carregar ---------------- */
 async function abrirPainel(){
-  try{
-    papel = await api("/rest/v1/rpc/meu_papel", {method:"POST", body:"{}"});
-  }catch(e){ papel = "nenhum"; }
+  try{ papel = await api("/rest/v1/rpc/meu_papel", {method:"POST", body:"{}"}); }
+  catch(e){ papel = "nenhum"; }
   if(papel === "nenhum"){
     $("#lg-msg").textContent = "Este e-mail ainda não tem acesso liberado ao painel.";
-    $("#lg-msg").className = "msg err on";
-    deslogar(); return;
+    $("#lg-msg").className = "msg err on"; deslogar(); return;
   }
-  const eu = sessao.user && sessao.user.email ? sessao.user.email : "";
-  $("#quem").textContent = eu + " · " + papel;
+  $("#quem").textContent = ((sessao.user && sessao.user.email) || "") + " · " + papel;
   $("#tela-login").classList.add("hide");
   $("#tela-painel").classList.remove("hide");
-  montaAbas();
-  await carregar();
+  montaAbas(); await carregar();
 }
 const master = () => papel === "master";
 
+let CFG = {};
+async function carregarConfig(){
+  const linhas = await api("/rest/v1/config?select=chave,valor");
+  CFG = {}; linhas.forEach(l => CFG[l.chave] = l.valor);
+}
 async function carregar(){
+  try{ await carregarConfig(); }catch(e){ CFG = CFG || {}; }
   leads = await api("/rest/v1/leads?select=*&order=cupom.desc");
   ganhadores = await api("/rest/v1/ganhadores?select=*,leads(cupom,nome,cidade,telefone)&order=criado_em.desc");
+  temStatus = !leads.length || leads[0].status !== undefined;
+  ultimaCarga = Date.now();
   render();
 }
-setInterval(() => { if(sessao) carregar().catch(()=>{}); }, 30000);
+setInterval(() => { if(sessao) carregar().catch(()=>{}); }, 20000);
+setInterval(() => {
+  if(!ultimaCarga) return;
+  const s = Math.round((Date.now()-ultimaCarga)/1000);
+  $("#frescor").textContent = s < 10 ? "agora" : "há " + s + "s";
+}, 1000);
 
 /* ---------------- abas ---------------- */
-const ABAS = [["resumo","Resumo"],["lista","Cadastros"],["brinde","Brinde"]];
+const ABAS = [["resumo","Resumo",false],["lista","Cadastros",false],
+              ["brinde","Brinde",false],["ajustes","Ajustes",true],["usuarios","Usuários",true]];
 let aba = "resumo";
 function montaAbas(){
   const host = $("#tabs"); host.innerHTML = "";
-  ABAS.forEach(([id,nome])=>{
+  ABAS.filter(([,,soMaster]) => !soMaster || master()).forEach(([id,nome])=>{
     const b = el("button","tab",nome); b.type="button"; b.setAttribute("role","tab");
     b.setAttribute("aria-selected", String(id===aba));
     b.onclick = () => { aba = id; montaAbas(); render(); };
@@ -159,155 +182,288 @@ function montaAbas(){
 }
 function render(){
   const p = $("#painel"); p.innerHTML = "";
-  ({resumo:vResumo, lista:vLista, brinde:vBrinde})[aba](p);
+  if(!ABAS.some(([id,,soMaster]) => id===aba && (!soMaster || master()))) aba = "resumo";
+  ({resumo:vResumo, lista:vLista, brinde:vBrinde, ajustes:vAjustes, usuarios:vUsuarios})[aba](p);
 }
 
 /* ---------------- exportar ---------------- */
-function csv(){
-  const cab = ["Cupom","Nome","WhatsApp","Cidade","Origem","Data e hora","Autorizou contato"];
-  const linhas = leads.slice().sort((a,b)=>a.cupom-b.cupom).map(l =>
+function csv(lista){
+  const cab = ["Cupom","Nome","WhatsApp","Cidade","Origem","Status","Data e hora","Autorizou contato"];
+  const linhas = lista.slice().sort((a,b)=>a.cupom-b.cupom).map(l =>
     [pad4(l.cupom), l.nome, maskTel(l.telefone), l.cidade,
-     l.origem === "qr" ? "QR code" : "Estande", dataHora(l.criado_em), l.consent ? "Sim" : "Nao"]);
+     l.origem === "qr" ? "QR code" : "Estande", l.status || "novo",
+     new Date(l.criado_em).toLocaleString("pt-BR"), l.consent ? "Sim" : "Nao"]);
   const esc = v => '"' + String(v).replace(/"/g,'""') + '"';
   return "﻿" + [cab, ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
 }
-function baixarCsv(){
+function baixar(lista, nome){
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([csv()], {type:"text/csv;charset=utf-8"}));
-  a.download = "cadastros-feirao.csv";
+  a.href = URL.createObjectURL(new Blob([csv(lista)], {type:"text/csv;charset=utf-8"}));
+  a.download = nome || "cadastros-feirao.csv";
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
 }
 
-/* ---------------- resumo ---------------- */
+/* ---------------- gráfico de colunas ---------------- */
+function colunas(dados){           // dados: [{rotulo, valor}]
+  const box = el("div","colunas");
+  const max = Math.max(1, ...dados.map(d=>d.valor));
+  dados.forEach(d => {
+    const c = el("div","coluna" + (d.valor === 0 ? " fraca" : ""));
+    c.appendChild(el("b",null, d.valor ? String(d.valor) : ""));
+    const i = el("i"); i.style.height = Math.round((d.valor/max)*88) + "px"; c.appendChild(i);
+    c.appendChild(el("span",null,d.rotulo));
+    c.title = d.rotulo + ": " + d.valor;
+    box.appendChild(c);
+  });
+  return box;
+}
+
+/* ---------------- RESUMO ---------------- */
 function vResumo(p){
-  const c = el("div","card");
-  c.appendChild(el("h2",null,"Resumo do feirão"));
   const hoje = new Date(); hoje.setHours(0,0,0,0);
-  const doDia = leads.filter(l => new Date(l.criado_em) >= hoje).length;
-  const hora  = leads.filter(l => new Date(l.criado_em) >= Date.now()-3600e3).length;
+  const doDia = leads.filter(l => new Date(l.criado_em) >= hoje);
+  const hora  = leads.filter(l => new Date(l.criado_em) >= Date.now()-3600e3);
   const porQr = leads.filter(l => l.origem === "qr").length;
 
+  const c = el("div","card");
+  c.appendChild(el("h2",null,"Resumo do feirão"));
   const g = el("div","grid");
-  [[leads.length,"Cupons no total"],[doDia,"Cadastros hoje"],[hora,"Na última hora"],[porQr,"Pelo QR code"]]
-    .forEach(([v,t])=>{ const s = el("div","stat"); s.appendChild(el("b",null,String(v)));
+  [[leads.length,"Cupons no total"],[doDia.length,"Cadastros hoje"],
+   [hora.length,"Na última hora"],[porQr,"Pelo QR code"]]
+    .forEach(([v,t])=>{ const s=el("div","stat"); s.appendChild(el("b",null,String(v)));
                         s.appendChild(el("span",null,t)); g.appendChild(s); });
   c.appendChild(g);
 
-  if(leads.length){
-    c.appendChild(el("h3",null,"Cadastros por cidade"));
-    const cont = {};
-    leads.forEach(l => cont[l.cidade] = (cont[l.cidade]||0)+1);
-    const ord = Object.entries(cont).sort((a,b)=>b[1]-a[1]).slice(0,6), max = ord[0][1];
-    const bars = el("div","bars");
-    ord.forEach(([cid,q])=>{
-      const b = el("div","bar");
-      b.appendChild(el("span",null,cid)); b.appendChild(el("b",null,String(q)));
-      const i = el("i"); i.style.width = Math.round(q/max*100)+"%"; b.appendChild(i);
-      bars.appendChild(b);
-    });
-    c.appendChild(bars);
-    const exp = el("button","btn primary","Exportar todos os cadastros (.csv)");
-    exp.onclick = baixarCsv; c.appendChild(exp);
-  } else {
-    c.appendChild(el("p","sub","Nenhum cadastro ainda."));
+  /* meta do dia */
+  const meta = el("div","meta");
+  const pct = Math.min(100, Math.round(doDia.length/META_DIA*100));
+  const linha = el("div","meta-linha");
+  linha.appendChild(el("span",null,"Meta de hoje"));
+  linha.appendChild(el("b",null, doDia.length + " / " + META_DIA + "  ·  " + pct + "%"));
+  meta.appendChild(linha);
+  const barra = el("div","meta-barra" + (pct >= 100 ? " batida" : ""));
+  const bi = el("i"); bi.style.width = pct + "%"; barra.appendChild(bi);
+  meta.appendChild(barra);
+  if(pct >= 100) meta.appendChild(el("p","sub","Meta batida. Bom trabalho."));
+  else if(doDia.length) {
+    const faltam = META_DIA - doDia.length;
+    meta.appendChild(el("p","sub","Faltam " + faltam + " cadastro" + (faltam>1?"s":"") + " para bater a meta do dia."));
   }
+  c.appendChild(meta);
   p.appendChild(c);
+
+  if(!leads.length){
+    const v = el("div","card"); v.style.marginTop = "14px";
+    v.appendChild(el("p","sub","Nenhum cadastro ainda. Assim que o primeiro cupom entrar, os gráficos aparecem aqui."));
+    p.appendChild(v); return;
+  }
+
+  /* por dia */
+  const cd = el("div","card"); cd.style.marginTop = "14px";
+  cd.appendChild(el("h2",null,"Cadastros por dia"));
+  const dias = [];
+  for(let i = 9; i >= 0; i--){
+    const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-i);
+    dias.push({ rotulo: p2(d.getDate())+"/"+p2(d.getMonth()+1),
+                valor: leads.filter(l => mesmoDia(new Date(l.criado_em), d)).length });
+  }
+  cd.appendChild(colunas(dias));
+  const melhor = dias.reduce((a,b)=>b.valor>a.valor?b:a, dias[0]);
+  if(melhor.valor) cd.appendChild(el("p","sub","Melhor dia até agora: " + melhor.rotulo + ", com " + melhor.valor + " cadastros."));
+  p.appendChild(cd);
+
+  /* por hora, hoje */
+  if(doDia.length){
+    const ch = el("div","card"); ch.style.marginTop = "14px";
+    ch.appendChild(el("h2",null,"Movimento de hoje, por hora"));
+    const horas = [];
+    for(let h = 9; h <= 22; h++){
+      horas.push({ rotulo: p2(h)+"h",
+                   valor: doDia.filter(l => new Date(l.criado_em).getHours() === h).length });
+    }
+    ch.appendChild(colunas(horas));
+    const pico = horas.reduce((a,b)=>b.valor>a.valor?b:a, horas[0]);
+    if(pico.valor) ch.appendChild(el("p","sub",
+      "Pico às " + pico.rotulo + ". Use isso para escalar a equipe nos próximos dias."));
+    p.appendChild(ch);
+  }
+
+  /* cidades e origem */
+  const cc = el("div","card"); cc.style.marginTop = "14px";
+  cc.appendChild(el("h2",null,"De onde vem o público"));
+  const cont = {};
+  leads.forEach(l => cont[l.cidade] = (cont[l.cidade]||0)+1);
+  const ord = Object.entries(cont).sort((a,b)=>b[1]-a[1]).slice(0,7), max = ord[0][1];
+  const bars = el("div","bars");
+  ord.forEach(([cid,q])=>{
+    const b = el("div","bar");
+    b.appendChild(el("span",null,cid)); b.appendChild(el("b",null, q + "  ·  " + Math.round(q/leads.length*100) + "%"));
+    const i = el("i"); i.style.width = Math.round(q/max*100)+"%"; b.appendChild(i);
+    bars.appendChild(b);
+  });
+  cc.appendChild(bars);
+
+  cc.appendChild(el("h3",null,"Como se cadastraram"));
+  const orig = el("div","bars");
+  [["QR code no celular", porQr],["Tablet do estande", leads.length-porQr]].forEach(([rot,q])=>{
+    const b = el("div","bar");
+    b.appendChild(el("span",null,rot));
+    b.appendChild(el("b",null, q + "  ·  " + Math.round(q/leads.length*100) + "%"));
+    const i = el("i"); i.style.width = Math.round(q/Math.max(1,leads.length)*100)+"%"; b.appendChild(i);
+    orig.appendChild(b);
+  });
+  cc.appendChild(orig);
+
+  if(temStatus){
+    cc.appendChild(el("h3",null,"Situação dos leads"));
+    const st = el("div","bars");
+    STATUS.forEach(s => {
+      const q = leads.filter(l => (l.status||"novo") === s).length;
+      if(!q) return;
+      const b = el("div","bar");
+      b.appendChild(el("span",null,s.charAt(0).toUpperCase()+s.slice(1)));
+      b.appendChild(el("b",null,String(q)));
+      const i = el("i"); i.style.width = Math.round(q/leads.length*100)+"%"; b.appendChild(i);
+      st.appendChild(b);
+    });
+    cc.appendChild(st);
+  }
+  const exp = el("button","btn primary","Exportar todos os cadastros (.csv)");
+  exp.onclick = () => baixar(leads);
+  cc.appendChild(exp);
+  p.appendChild(cc);
 }
 
-/* ---------------- lista ---------------- */
-let busca = "";
+/* ---------------- CADASTROS ---------------- */
+let busca = "", fStatus = "", fCidade = "", fOrigem = "";
 function vLista(p){
   const c = el("div","card");
-  c.appendChild(el("h2",null,"Cadastros (" + leads.length + ")"));
+  c.appendChild(el("h2",null,"Cadastros"));
+
+  if(!temStatus){
+    const av = el("div","msg err on");
+    av.textContent = "Rode a migração migracao-02-status.sql no Supabase para liberar o acompanhamento dos leads.";
+    c.appendChild(av);
+  }
+
   const b = document.createElement("input");
   b.type = "text"; b.placeholder = "Buscar por nome, telefone ou cidade"; b.value = busca;
-  b.oninput = () => { busca = b.value; tabela(); };
+  b.oninput = () => { busca = b.value; desenha(); };
   c.appendChild(b);
-  const exp = el("button","btn","Exportar todos os cadastros (.csv)");
-  exp.onclick = baixarCsv; c.appendChild(exp);
-  const wrap = el("div","tablewrap"); c.appendChild(wrap); p.appendChild(c);
 
-  function tabela(){
+  const filtros = el("div","filtros");
+  const sel = (valorAtual, itens, aoMudar) => {
+    const s = document.createElement("select");
+    itens.forEach(([v,t]) => { const o = document.createElement("option");
+      o.value = v; o.textContent = t; if(v===valorAtual) o.selected = true; s.appendChild(o); });
+    s.onchange = () => { aoMudar(s.value); desenha(); };
+    return s;
+  };
+  const cidades = [...new Set(leads.map(l=>l.cidade))].sort();
+  filtros.appendChild(sel(fStatus, [["","Todos os status"], ...STATUS.map(s=>[s,s.charAt(0).toUpperCase()+s.slice(1)])], v=>fStatus=v));
+  filtros.appendChild(sel(fCidade, [["","Todas as cidades"], ...cidades.map(c2=>[c2,c2])], v=>fCidade=v));
+  filtros.appendChild(sel(fOrigem, [["","QR e estande"],["qr","Só QR code"],["estande","Só estande"]], v=>fOrigem=v));
+  c.appendChild(filtros);
+
+  const contador = el("p","sub"); c.appendChild(contador);
+  const expF = el("button","btn","Exportar o que está filtrado (.csv)");
+  c.appendChild(expF);
+  const host = el("div","lista-leads"); c.appendChild(host);
+  p.appendChild(c);
+
+  function filtrados(){
     const q = busca.trim().toLowerCase();
-    const lista = leads.filter(l => !q || l.nome.toLowerCase().includes(q)
-                   || l.telefone.includes(digits(q)) || l.cidade.toLowerCase().includes(q));
-    wrap.innerHTML = "";
-    if(!lista.length){ wrap.style.padding="14px"; wrap.appendChild(el("p","sub","Nada encontrado.")); return; }
-    wrap.style.padding = "0";
-    const t = document.createElement("table"), thead = document.createElement("thead"),
-          hr = document.createElement("tr");
-    ["Cupom","Nome","WhatsApp","Cidade","Origem","Horário", master()?"":""].forEach(h=>{
-      const th = document.createElement("th"); th.textContent = h; hr.appendChild(th); });
-    thead.appendChild(hr); t.appendChild(thead);
-    const tb = document.createElement("tbody");
+    return leads.filter(l =>
+      (!q || l.nome.toLowerCase().includes(q) || l.telefone.includes(digits(q)) || l.cidade.toLowerCase().includes(q)) &&
+      (!fStatus || (l.status||"novo") === fStatus) &&
+      (!fCidade || l.cidade === fCidade) &&
+      (!fOrigem || l.origem === fOrigem));
+  }
+
+  function desenha(){
+    const lista = filtrados();
+    contador.textContent = lista.length + " de " + leads.length + " cadastros";
+    expF.onclick = () => baixar(lista, "cadastros-filtrados.csv");
+    host.innerHTML = "";
+    if(!lista.length){ host.appendChild(el("p","sub","Nada encontrado com esses filtros.")); return; }
+
     lista.forEach(l => {
-      const tr = document.createElement("tr");
-      const add = (txt,cls) => { const td=document.createElement("td"); if(cls)td.className=cls;
-                                 td.textContent=txt; tr.appendChild(td); };
-      add(pad4(l.cupom),"n"); add(l.nome); add(maskTel(l.telefone),"tel"); add(l.cidade);
-      add(l.origem === "qr" ? "QR" : "Estande"); add(dataHora(l.criado_em));
-      const td = document.createElement("td");
+      const card = el("div","lead");
+      const topo = el("div","lead-topo");
+      topo.appendChild(el("div","lead-nome", l.nome));
+      topo.appendChild(el("div","lead-num","Nº " + pad4(l.cupom)));
+      card.appendChild(topo);
+
+      const meta = el("div","lead-meta");
+      meta.appendChild(el("span",null,maskTel(l.telefone)));
+      meta.appendChild(el("span",null,"·"));
+      meta.appendChild(el("span",null,l.cidade));
+      meta.appendChild(el("span",null,"·"));
+      meta.appendChild(el("span",null, l.origem === "qr" ? "QR" : "Estande"));
+      meta.appendChild(el("span",null,"·"));
+      meta.appendChild(el("span",null, dataHora(l.criado_em)));
+      if(temStatus) meta.appendChild(el("span","tag-status " + (l.status||"novo"), l.status || "novo"));
+      card.appendChild(meta);
+
+      const acoes = el("div","lead-acoes");
+      const msg = (C.MSG_WHATSAPP || "Oi {nome}! Aqui é da Aletrini Multimarcas. Você pegou o cupom {cupom} no nosso feirão.")
+        .replace("{nome}", l.nome.split(" ")[0]).replace("{cupom}", pad4(l.cupom));
+      const a = document.createElement("a");
+      a.className = "zap"; a.target = "_blank"; a.rel = "noopener";
+      a.href = "https://wa.me/55" + digits(l.telefone) + "?text=" + encodeURIComponent(msg);
+      a.textContent = "Chamar no WhatsApp";
+      acoes.appendChild(a);
+
+      if(temStatus){
+        const s = document.createElement("select");
+        STATUS.forEach(v => { const o = document.createElement("option");
+          o.value = v; o.textContent = v.charAt(0).toUpperCase()+v.slice(1);
+          if(v === (l.status||"novo")) o.selected = true; s.appendChild(o); });
+        s.onchange = async () => {
+          const antes = l.status;
+          l.status = s.value;
+          try{
+            await api("/rest/v1/leads?id=eq." + l.id, {method:"PATCH", body: JSON.stringify({status: s.value})});
+            desenha();
+          }catch(e){ l.status = antes; alert("Não consegui salvar. Confira a internet."); s.value = antes || "novo"; }
+        };
+        acoes.appendChild(s);
+      }
+
       if(master()){
         const x = el("button","btn danger","Excluir");
-        x.style.padding="4px 10px"; x.style.fontSize="12px";
+        x.style.padding = "7px 12px"; x.style.fontSize = "13px"; x.style.flex = "none";
         x.onclick = async () => {
           if(!confirm("Excluir o cadastro de " + l.nome + "?")) return;
           await api("/rest/v1/leads?id=eq." + l.id, {method:"DELETE"});
           await carregar();
         };
-        td.appendChild(x);
+        acoes.appendChild(x);
       }
-      tr.appendChild(td); tb.appendChild(tr);
+      card.appendChild(acoes);
+      host.appendChild(card);
     });
-    t.appendChild(tb); wrap.appendChild(t);
   }
-  tabela();
+  desenha();
 }
 
-/* ---------------- brinde ---------------- */
+/* ---------------- BRINDE ---------------- */
 let sorteando = false;
 function vBrinde(p){
-  const c = el("div","card");
-  c.appendChild(el("h2",null,"Brinde" + (C.BRINDE ? " — " + C.BRINDE : "")));
   const jaGanhou = new Set(ganhadores.map(g => g.lead_id));
   const pool = leads.filter(l => !jaGanhou.has(l.id));
+
+  const c = el("div","card");
+  c.appendChild(el("h2",null,"Brinde" + (CFG.brinde ? " — " + CFG.brinde : "")));
   c.appendChild(el("p","sub", pool.length + " cupons participando" +
     (ganhadores.length ? " (ganhadores anteriores fora)" : "") + "."));
 
-  const box = el("div","draw");
-  const roll = el("div","roll","0000"), nome = el("div","name","Pronto para escolher");
-  box.appendChild(roll); box.appendChild(nome); c.appendChild(box);
-
   if(master()){
-    const btn = el("button","btn primary big","Escolher ganhador");
-    btn.onclick = () => {
-      if(sorteando) return;
-      if(pool.length < 2){ alert("É preciso ter pelo menos 2 cupons participando."); return; }
-      sorteando = true; btn.disabled = true;
-      const escolhido = pool[Math.floor(Math.random()*pool.length)];
-      const reduz = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const dur = reduz ? 0 : 2400, t0 = performance.now();
-      const fim = async () => {
-        roll.textContent = pad4(escolhido.cupom);
-        nome.textContent = escolhido.nome;
-        try{
-          await api("/rest/v1/ganhadores", {method:"POST",
-            body: JSON.stringify({ lead_id: escolhido.id, brinde: C.BRINDE || null })});
-          await carregar();
-        }catch(e){ alert("Não consegui registrar o ganhador. Confira a internet e tente de novo."); }
-        sorteando = false;
-      };
-      if(reduz){ fim(); return; }
-      (function tick(t){
-        const k = (t-t0)/dur;
-        if(k >= 1){ fim(); return; }
-        roll.textContent = pad4(pool[Math.floor(Math.random()*pool.length)].cupom);
-        nome.textContent = "Escolhendo...";
-        setTimeout(()=>requestAnimationFrame(tick), 40 + k*k*260);
-      })(performance.now());
-    };
-    c.appendChild(btn);
+    const b = el("button","btn primary big","Abrir modo apresentação");
+    b.onclick = () => palco(pool);
+    c.appendChild(b);
+    c.appendChild(el("p","sub","Abre em tela cheia, com as duas marcas e o número grande — para projetar ou mostrar ao público no momento do resultado."));
   } else {
     c.appendChild(el("p","sub","Seu acesso é de consulta: você acompanha o resultado, mas não escolhe o ganhador."));
   }
@@ -324,13 +480,17 @@ function vBrinde(p){
     s.textContent = "Cupom " + pad4(l.cupom||0) + " · " + dataHora(w.criado_em) + (w.brinde ? " · " + w.brinde : "");
     esq.appendChild(s); r.appendChild(esq);
     const dir = el("div","row"); dir.style.flex="none"; dir.style.gap="6px";
-    const tel = el("button","btn ghost","Ver WhatsApp");
-    tel.style.padding="4px 10px"; tel.style.fontSize="12px"; tel.style.flex="none";
-    tel.onclick = () => { tel.textContent = maskTel(l.telefone||""); tel.onclick = null; };
-    dir.appendChild(tel);
+    const a = document.createElement("a");
+    a.className = "zap"; a.target = "_blank"; a.rel = "noopener";
+    a.style.padding = "6px 11px"; a.style.fontSize = "12.5px";
+    a.href = "https://wa.me/55" + digits(l.telefone||"") + "?text=" +
+      encodeURIComponent("Parabéns, " + String(l.nome||"").split(" ")[0] + "! O cupom " + pad4(l.cupom||0) +
+        " foi o ganhador" + (w.brinde ? " de " + w.brinde : "") + " no nosso feirão.");
+    a.textContent = "Avisar ganhador";
+    dir.appendChild(a);
     if(master()){
       const x = el("button","btn danger","Anular");
-      x.style.padding="4px 10px"; x.style.fontSize="12px"; x.style.flex="none";
+      x.style.padding="6px 11px"; x.style.fontSize="12.5px"; x.style.flex="none";
       x.onclick = async () => {
         if(!confirm("Anular este resultado?")) return;
         await api("/rest/v1/ganhadores?id=eq." + w.id, {method:"DELETE"});
@@ -341,6 +501,304 @@ function vBrinde(p){
     r.appendChild(dir); g.appendChild(r);
   });
   p.appendChild(g);
+}
+
+
+/* ---------------- USUÁRIOS (só master) ---------------- */
+async function chamarApi(corpo){
+  const r = await fetch("/api/usuarios", {
+    method: "POST",
+    headers: { "Content-Type":"application/json",
+               "Authorization": "Bearer " + (sessao && sessao.access_token) },
+    body: JSON.stringify(corpo)
+  });
+  const dados = await r.json().catch(()=>({erro:"resposta inesperada"}));
+  if(!r.ok) throw new Error(dados.erro || "erro");
+  return dados;
+}
+
+function vUsuarios(p){
+  if(!master()){ p.appendChild(el("p","sub","Área restrita ao acesso master.")); return; }
+
+  const c = el("div","card");
+  c.appendChild(el("h2",null,"Quem tem acesso ao painel"));
+  const aviso = el("div","msg");
+  const diz = (t, tipo) => { aviso.textContent = t; aviso.className = "msg on " + (tipo||"ok"); };
+  const lista = el("div","lista-leads"); lista.style.maxHeight = "none";
+  c.appendChild(lista); c.appendChild(aviso);
+  p.appendChild(c);
+
+  async function carregarUsuarios(){
+    lista.innerHTML = "";
+    lista.appendChild(el("p","sub","Carregando..."));
+    try{
+      const { usuarios } = await chamarApi({ acao:"listar" });
+      lista.innerHTML = "";
+      usuarios.forEach(u => {
+        const card = el("div","lead");
+        const topo = el("div","lead-topo");
+        topo.appendChild(el("div","lead-nome", u.nome || u.email.split("@")[0]));
+        topo.appendChild(el("span","tag-status " + (u.papel === "master" ? "vendido" : "novo"), u.papel));
+        card.appendChild(topo);
+
+        const meta = el("div","lead-meta");
+        meta.appendChild(el("span",null,u.email));
+        if(u.ultimo_acesso){
+          meta.appendChild(el("span",null,"·"));
+          meta.appendChild(el("span",null,"último acesso " + dataHora(u.ultimo_acesso)));
+        } else {
+          meta.appendChild(el("span",null,"·"));
+          meta.appendChild(el("span",null,"nunca entrou"));
+        }
+        if(sessao.user && u.email === sessao.user.email){
+          meta.appendChild(el("span",null,"·")); meta.appendChild(el("span",null,"você"));
+        }
+        card.appendChild(meta);
+
+        const acoes = el("div","lead-acoes");
+
+        const bs = el("button","btn","Trocar senha");
+        bs.style.padding="7px 12px"; bs.style.fontSize="13px"; bs.style.flex="none";
+        bs.onclick = async () => {
+          const nova = prompt("Nova senha para " + u.email + " (mínimo 6 caracteres):");
+          if(nova === null) return;
+          if(nova.length < 6) return diz("A senha precisa de pelo menos 6 caracteres.","err");
+          try{ await chamarApi({ acao:"senha", user_id:u.id, senha:nova });
+               diz("Senha de " + u.email + " atualizada."); }
+          catch(e){ diz(e.message, "err"); }
+        };
+        acoes.appendChild(bs);
+
+        const sel = document.createElement("select");
+        [["consulta","Consulta"],["master","Master"]].forEach(([v,t])=>{
+          const o = document.createElement("option"); o.value=v; o.textContent=t;
+          if(v===u.papel) o.selected = true; sel.appendChild(o); });
+        sel.onchange = async () => {
+          try{ await chamarApi({ acao:"papel", user_id:u.id, papel:sel.value, nome:u.nome || u.email.split("@")[0] });
+               diz("Acesso de " + u.email + " agora é " + sel.value + "."); await carregarUsuarios(); }
+          catch(e){ diz(e.message, "err"); await carregarUsuarios(); }
+        };
+        acoes.appendChild(sel);
+
+        if(!(sessao.user && u.email === sessao.user.email)){
+          const bx = el("button","btn danger","Remover");
+          bx.style.padding="7px 12px"; bx.style.fontSize="13px"; bx.style.flex="none";
+          bx.onclick = async () => {
+            if(!confirm("Remover o acesso de " + u.email + "?")) return;
+            try{ await chamarApi({ acao:"remover", user_id:u.id });
+                 diz("Acesso removido."); await carregarUsuarios(); }
+            catch(e){ diz(e.message, "err"); }
+          };
+          acoes.appendChild(bx);
+        }
+        card.appendChild(acoes);
+        lista.appendChild(card);
+      });
+    }catch(e){
+      lista.innerHTML = "";
+      const err = el("div","msg err on");
+      err.textContent = "Não consegui carregar: " + e.message +
+        ". Se você abriu o painel como arquivo local, use o endereço do site — a gestão de usuários só funciona publicada.";
+      lista.appendChild(err);
+    }
+  }
+  carregarUsuarios();
+
+  /* novo acesso */
+  const n = el("div","card"); n.style.marginTop = "14px";
+  n.appendChild(el("h2",null,"Liberar novo acesso"));
+  n.appendChild(el("p","sub","Master faz tudo. Consulta vê os números, a lista e exporta a planilha, mas não exclui cadastro nem escolhe ganhador."));
+  const campo = (rot, tipo, dica) => {
+    const f = el("div","field"); f.appendChild(el("label",null,rot));
+    const i = document.createElement("input"); i.type = tipo; if(dica) i.placeholder = dica;
+    f.appendChild(i); n.appendChild(f); return i;
+  };
+  const iNome  = campo("Nome de quem usa","text","Ex.: João");
+  const iEmail = campo("E-mail","email","joao@exemplo.com");
+  const iSenha = campo("Senha provisória","text","Mínimo de 6 caracteres");
+  const fp = el("div","field");
+  fp.appendChild(el("label",null,"Perfil"));
+  const chips = el("div","chips");
+  let perfil = "consulta";
+  [["consulta","Somente consulta"],["master","Master"]].forEach(([v,rot])=>{
+    const b = el("button","chip",rot); b.type="button";
+    b.setAttribute("aria-pressed", String(v===perfil));
+    b.onclick = () => { perfil = v; [...chips.children].forEach(x=>x.setAttribute("aria-pressed", String(x===b))); };
+    chips.appendChild(b);
+  });
+  fp.appendChild(chips); n.appendChild(fp);
+  const av2 = el("div","msg");
+  const criar = el("button","btn primary","Liberar acesso");
+  criar.onclick = async () => {
+    const email = iEmail.value.trim().toLowerCase(), senha = iSenha.value;
+    if(!email.includes("@")) { av2.className="msg err on"; av2.textContent="Informe um e-mail válido."; return; }
+    if(senha.length < 6)     { av2.className="msg err on"; av2.textContent="A senha precisa de pelo menos 6 caracteres."; return; }
+    criar.disabled = true; criar.textContent = "Criando...";
+    try{
+      await chamarApi({ acao:"criar", email, senha, nome:iNome.value.trim(), papel:perfil });
+      av2.className="msg ok on";
+      av2.textContent = "Acesso de " + email + " criado como " + perfil + ". Anote a senha e peça para a pessoa trocá-la depois.";
+      iNome.value=""; iEmail.value=""; iSenha.value="";
+      await carregarUsuarios();
+    }catch(e){ av2.className="msg err on"; av2.textContent = e.message; }
+    finally{ criar.disabled = false; criar.textContent = "Liberar acesso"; }
+  };
+  n.appendChild(criar); n.appendChild(av2);
+  p.appendChild(n);
+}
+
+
+/* ---------------- AJUSTES (só master) ---------------- */
+async function salvarConfig(chave, valor){
+  await api("/rest/v1/config", {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify({ chave, valor: valor || "" })
+  });
+  CFG[chave] = valor || "";
+}
+
+function vAjustes(p){
+  if(!master()){ p.appendChild(el("p","sub","Área restrita ao acesso master.")); return; }
+
+  const c = el("div","card");
+  c.appendChild(el("h2",null,"O que aparece na tela do cliente"));
+  c.appendChild(el("p","sub","Vale para todos os aparelhos na hora: o celular de quem lê o QR e o tablet do estande."));
+  const aviso = el("div","msg");
+  const diz = (t,tipo) => { aviso.textContent = t; aviso.className = "msg on " + (tipo||"ok"); };
+
+  const campo = (rot, chave, dica) => {
+    const f = el("div","field");
+    f.appendChild(el("label",null,rot));
+    const i = document.createElement("input");
+    i.type = "text"; i.value = CFG[chave] || ""; if(dica) i.placeholder = dica;
+    let t;
+    i.oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        try{ await salvarConfig(chave, i.value); diz("Salvo."); }
+        catch(e){ diz("Não consegui salvar: " + e.message, "err"); }
+      }, 700);
+    };
+    f.appendChild(i); c.appendChild(f);
+    return i;
+  };
+
+  campo("Nome do evento", "evento", "Ex.: Feirão Boulevard Rio");
+  campo("Chamada da tela", "titulo", "Ex.: Concorra ao brinde");
+  campo("Brinde", "brinde", "Ex.: uma Alexa");
+  campo("Data e local do resultado", "resultado", "Ex.: Domingo, 30/08, às 17h, no estande.");
+
+  /* foto do brinde */
+  const fp = el("div","field");
+  fp.appendChild(el("label",null,"Foto do brinde"));
+  const linha = el("div","row"); linha.style.alignItems = "center";
+  const thumb = document.createElement("img");
+  thumb.style.cssText = "width:84px;height:84px;object-fit:cover;border-radius:10px;border:2px solid var(--accent);flex:none";
+  if(CFG.brinde_img) thumb.src = CFG.brinde_img; else thumb.style.display = "none";
+  const arquivo = document.createElement("input");
+  arquivo.type = "file"; arquivo.accept = "image/*"; arquivo.style.fontSize = "13px";
+  const tirar = el("button","btn danger","Remover foto");
+  tirar.style.flex = "none";
+
+  arquivo.onchange = () => {
+    const f = arquivo.files && arquivo.files[0];
+    if(!f) return;
+    diz("Preparando a imagem...");
+    const fr = new FileReader();
+    fr.onload = () => {
+      const im = new Image();
+      im.onload = async () => {
+        const max = 900, k = Math.min(1, max/Math.max(im.width, im.height));
+        const cv = document.createElement("canvas");
+        cv.width = Math.round(im.width*k); cv.height = Math.round(im.height*k);
+        cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
+        cv.toBlob(async blob => {
+          try{
+            diz("Enviando...");
+            const r = await fetch(C.SUPABASE_URL + "/storage/v1/object/publico/brinde.jpg", {
+              method: "POST",
+              headers: { apikey: C.SUPABASE_KEY,
+                         Authorization: "Bearer " + sessao.access_token,
+                         "Content-Type": "image/jpeg",
+                         "x-upsert": "true" },
+              body: blob
+            });
+            if(!r.ok) throw new Error((await r.text()).slice(0,120));
+            const url = C.SUPABASE_URL + "/storage/v1/object/public/publico/brinde.jpg?v=" + Date.now();
+            await salvarConfig("brinde_img", url);
+            thumb.src = url; thumb.style.display = "block";
+            diz("Foto do brinde atualizada. Já está valendo em todos os aparelhos.");
+          }catch(e){ diz("Não consegui enviar: " + e.message, "err"); }
+        }, "image/jpeg", 0.82);
+      };
+      im.onerror = () => diz("Não consegui ler essa imagem.", "err");
+      im.src = fr.result;
+    };
+    fr.readAsDataURL(f);
+  };
+  tirar.onclick = async () => {
+    try{ await salvarConfig("brinde_img",""); thumb.style.display="none"; diz("Foto removida."); }
+    catch(e){ diz(e.message, "err"); }
+  };
+
+  linha.appendChild(thumb); linha.appendChild(arquivo); linha.appendChild(tirar);
+  fp.appendChild(linha); c.appendChild(fp);
+  c.appendChild(el("p","sub","A tela do cliente mostra “Imagem meramente ilustrativa” junto da foto."));
+  c.appendChild(aviso);
+  p.appendChild(c);
+}
+
+/* modo apresentação */
+function palco(pool){
+  const tela = el("div","palco");
+  const logos = el("div","logos");
+  logos.innerHTML =
+    '<img class="logo on-light" src="img/aletrini.png" alt=""><img class="logo on-dark" src="img/aletrini-claro.png" alt="">' +
+    '<span class="logo-sep"></span>' +
+    '<img class="logo kalil on-light" src="img/kalil.png" alt=""><img class="logo kalil on-dark" src="img/kalil-claro.png" alt="">';
+  const fechar = el("button","btn ghost sair-palco","Fechar");
+  const rotulo = el("div","rotulo", CFG.brinde ? "O ganhador de " + CFG.brinde : "O ganhador");
+  const numero = el("div","numero","0000");
+  const pessoa = el("div","pessoa","");
+  const botao  = el("button","btn primary big","Escolher agora");
+
+  tela.appendChild(fechar); tela.appendChild(logos); tela.appendChild(rotulo);
+  tela.appendChild(numero); tela.appendChild(pessoa); tela.appendChild(botao);
+  document.body.appendChild(tela);
+  const sai = () => { tela.remove(); carregar().catch(()=>{}); };
+  fechar.onclick = sai;
+
+  botao.onclick = () => {
+    if(sorteando) return;
+    if(pool.length < 2){ alert("É preciso ter pelo menos 2 cupons participando."); return; }
+    sorteando = true; botao.disabled = true; botao.textContent = "Escolhendo...";
+    const escolhido = pool[Math.floor(Math.random()*pool.length)];
+    const reduz = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const dur = reduz ? 0 : 3200, t0 = performance.now();
+    const fim = async () => {
+      numero.textContent = pad4(escolhido.cupom);
+      pessoa.textContent = escolhido.nome;
+      botao.textContent = "Registrando...";
+      try{
+        await api("/rest/v1/ganhadores", {method:"POST",
+          body: JSON.stringify({ lead_id: escolhido.id, brinde: CFG.brinde || null })});
+        botao.textContent = "Ganhador registrado";
+      }catch(e){ botao.textContent = "Erro ao registrar — tente de novo"; botao.disabled = false; }
+      sorteando = false;
+    };
+    if(reduz){ fim(); return; }
+    (function tick(t){
+      const k = (t-t0)/dur;
+      if(k >= 1){ fim(); return; }
+      numero.textContent = pad4(pool[Math.floor(Math.random()*pool.length)].cupom);
+      pessoa.textContent = "...";
+      setTimeout(()=>requestAnimationFrame(tick), 40 + k*k*300);
+    })(performance.now());
+  };
+  document.addEventListener("keydown", function esc(e){
+    if(e.key === "Escape"){ sai(); document.removeEventListener("keydown", esc); }
+  });
 }
 
 /* ---------------- início ---------------- */

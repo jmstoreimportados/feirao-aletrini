@@ -48,6 +48,24 @@ Quem não estiver na tabela `perfis` não entra no painel, mesmo tendo login.
 
 ---
 
+## Etapa 2b — liberar o acompanhamento de leads
+
+No SQL Editor, rode também o arquivo `migracao-02-status.sql`. Ele acrescenta o status de cada
+lead (novo, contatado, agendado, vendido, perdido) e a anotação, sem apagar nada — pode rodar
+com o feirão acontecendo.
+
+Sem essa migração o painel funciona, mas avisa que o acompanhamento está desligado.
+
+As migrações, na ordem (todas podem rodar com o feirão acontecendo, nenhuma apaga dados):
+
+| Arquivo | O que libera |
+|---|---|
+| `schema.sql` | a base: cadastros, ganhadores, perfis e permissões |
+| `migracao-02-status.sql` | status de cada lead (novo, contatado, agendado, vendido, perdido) |
+| `migracao-03-brinde.sql` | aba Ajustes: nome do brinde, data do resultado e foto |
+
+---
+
 ## Etapa 3 — preencher o `config.js`
 
 Abra o arquivo `config.js` e troque as duas primeiras linhas pelos valores da Etapa 1:
@@ -75,6 +93,26 @@ schema.sql
 LEIA-ME.md
 img/
 ```
+
+---
+
+## Etapa 4b — variáveis de ambiente na Vercel (gestão de usuários)
+
+A aba **Usuários** cria logins e troca senhas, o que exige a chave `service_role`. Ela nunca vai
+para o site: fica guardada na Vercel e só é usada pela função `api/usuarios.js`, que roda no
+servidor e confere se quem chamou é master antes de qualquer coisa.
+
+Na Vercel, em **Settings → Environment Variables**, cadastre:
+
+| Nome | Valor |
+|---|---|
+| `SUPABASE_URL` | `https://zmcvvgtfiftsiarjidrp.supabase.co` |
+| `SUPABASE_SERVICE_ROLE` | a chave service_role do Supabase |
+
+Depois de cadastrar, faça um **Redeploy** para as variáveis entrarem em vigor.
+
+> A aba Usuários só funciona no site publicado. Abrindo o `painel.html` como arquivo local,
+> ela avisa que não conseguiu carregar — é esperado.
 
 ---
 
@@ -120,7 +158,10 @@ Cole na testeira do estande e em um cavalete na altura dos olhos.
 ## Como a equipe usa
 
 - **Cliente:** aponta a câmera → preenche → recebe o número do cupom na tela.
-- **Equipe:** `feiraoaletrini.com.br/painel.html` → login → Resumo, Cadastros, Brinde.
+- **Equipe:** `feiraoaletrini.com.br/painel.html` → login. Três abas:
+  - **Resumo** — totais, meta do dia, cadastros por dia, movimento por hora, cidades, QR x estande
+  - **Cadastros** — busca, filtros, botão *Chamar no WhatsApp* com mensagem pronta, status de cada lead
+  - **Brinde** — modo apresentação em tela cheia para o momento do resultado
 - **Tablet da loja:** use `feiraoaletrini.com.br/?estande=1` — os cadastros feitos ali ficam
   marcados como "Estande", para você saber o que veio do QR e o que veio da equipe.
 

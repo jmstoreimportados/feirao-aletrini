@@ -26,9 +26,11 @@
       <p class="sub">Preencha e leve seu número da sorte.</p>
     </div>
     <div class="prize hide" id="prize-box">
+      <img id="prize-img" class="hide" alt="">
       <div class="prize-txt">
         <span>Brinde do feirão</span>
         <strong id="prize-name"></strong>
+        <small id="prize-nota" class="hide">Imagem meramente ilustrativa</small>
       </div>
     </div>
     <div class="ticket-body">
@@ -70,7 +72,28 @@
     <p class="sub" id="ok-data"></p>
   </div>
   <p class="sub" style="text-align:center">Guarde seu número. O ganhador é avisado pelo WhatsApp.</p>
+
+  <div class="convite">
+    <div class="convite-txt">
+      <strong>Acompanhe o resultado no Instagram</strong>
+      <span>É por lá que a gente anuncia o ganhador e os carros que chegam.</span>
+    </div>
+    <a class="btn primary" id="insta" href="https://instagram.com/aletrini_multimarcas"
+       target="_blank" rel="noopener">Seguir @aletrini_multimarcas</a>
+  </div>
+
   <button class="btn ghost" id="novo">Cadastrar outra pessoa</button>
+</div>
+
+<div class="wrap hide" id="tela-fila" style="align-items:center;justify-content:center">
+  <div class="stub">
+    <div class="eyebrow">Sem internet no momento</div>
+    <div class="num" style="font-size:clamp(38px,12vw,64px)">Guardado</div>
+    <p class="sub" id="fila-txt">Seu cadastro está salvo neste aparelho e vai ser enviado sozinho
+       assim que a conexão voltar. <strong>Deixe esta tela aberta mais um instante.</strong></p>
+    <div class="seal" id="fila-estado">Tentando enviar...</div>
+  </div>
+  <button class="btn ghost" id="fila-tentar">Tentar agora</button>
 </div>
 
 <div class="overlay hide" id="regras" role="dialog" aria-modal="true">
@@ -102,9 +125,45 @@ function maskTel(v){
   return "("+d.slice(0,2)+") "+d.slice(2,7)+"-"+d.slice(7);
 }
 
-$("#ev-label").textContent = C.EVENTO || "Feirão";
-$("#ev-title").textContent = C.TITULO || "Concorra ao brinde";
-if(C.BRINDE){ $("#prize-box").classList.remove("hide"); $("#prize-name").textContent = C.BRINDE; }
+/* Os textos e a foto do brinde vêm do banco (aba Ajustes do painel).
+   O que está no config.js serve de reserva se o banco não responder. */
+const CACHE_CFG = "feirao_cfg";
+function aplicaConfig(cfg){
+  const evento    = cfg.evento    || C.EVENTO || "Feirão";
+  const titulo    = cfg.titulo    || C.TITULO || "Concorra ao brinde";
+  const brinde    = cfg.brinde    !== undefined ? cfg.brinde : (C.BRINDE || "");
+  const resultado = cfg.resultado !== undefined ? cfg.resultado : (C.RESULTADO || "");
+  const foto      = cfg.brinde_img || "";
+
+  $("#ev-label").textContent = evento;
+  $("#ev-title").textContent = titulo;
+  $("#prize-box").classList.toggle("hide", !(brinde || foto));
+  $("#prize-name").textContent = brinde || "Brinde surpresa";
+  const img = $("#prize-img");
+  img.classList.toggle("hide", !foto);
+  $("#prize-nota").classList.toggle("hide", !foto);
+  if(foto) img.src = foto; else img.removeAttribute("src");
+
+  CFG = { evento, titulo, brinde, resultado, brinde_img: foto };
+}
+
+let CFG = { evento:C.EVENTO, titulo:C.TITULO, brinde:C.BRINDE, resultado:C.RESULTADO, brinde_img:"" };
+try{ const salvo = JSON.parse(localStorage.getItem(CACHE_CFG) || "null"); if(salvo) aplicaConfig(salvo); }
+catch(e){}
+aplicaConfig(CFG);
+
+(async () => {
+  try{
+    const r = await fetch(C.SUPABASE_URL + "/rest/v1/config?select=chave,valor", {
+      headers:{ apikey:C.SUPABASE_KEY, Authorization:"Bearer "+C.SUPABASE_KEY }
+    });
+    if(!r.ok) return;
+    const cfg = {};
+    (await r.json()).forEach(l => cfg[l.chave] = l.valor);
+    aplicaConfig(cfg);
+    try{ localStorage.setItem(CACHE_CFG, JSON.stringify(cfg)); }catch(e){}
+  }catch(e){ /* sem internet: fica o que já está na tela */ }
+})();
 
 const chips = $("#cid-chips"), inpCid = $("#f-cid"), inpTel = $("#f-tel"),
       inpNome = $("#f-nome"), chkOk = $("#f-ok"), btn = $("#send");
@@ -140,6 +199,64 @@ trava();
 
 function erro(t){ const m=$("#form-msg"); m.textContent=t; m.className="msg err on"; }
 
+/* ---------- fila offline ----------
+   Se a internet falhar na hora do envio, o cadastro fica guardado neste
+   aparelho e é reenviado sozinho. Vale principalmente para o tablet do
+   estande, que fica aberto o dia inteiro. */
+const FILA = "feirao_fila";
+const lerFila   = () => { try{ return JSON.parse(localStorage.getItem(FILA) || "[]"); }catch(e){ return []; } };
+const gravaFila = f  => { try{ localStorage.setItem(FILA, JSON.stringify(f)); }catch(e){} };
+
+async function mandar(item){
+  const r = await fetch(C.SUPABASE_URL + "/rest/v1/rpc/cadastrar", {
+    method:"POST",
+    headers:{ "Content-Type":"application/json", "apikey":C.SUPABASE_KEY,
+              "Authorization":"Bearer "+C.SUPABASE_KEY },
+    body: JSON.stringify({ p_nome:item.nome, p_telefone:item.tel,
+                           p_cidade:item.cidade, p_origem:item.origem })
+  });
+  if(!r.ok) throw new Error("http "+r.status);
+  return r.json();
+}
+
+function mostrarCupom(cupom, nome){
+  const repetido = cupom < 0;
+  $("#ok-titulo").textContent = repetido ? "Você já está participando" : "Cupom registrado";
+  $("#ok-num").textContent = String(Math.abs(cupom)).padStart(4,"0");
+  $("#ok-nome").textContent = nome.split(" ")[0] + "!";
+  $("#ok-brinde").textContent = CFG.brinde ? "Concorrendo a " + CFG.brinde : "";
+  $("#ok-data").textContent = CFG.resultado ? "Resultado: " + CFG.resultado : "";
+  $("#tela-form").classList.add("hide");
+  $("#tela-fila").classList.add("hide");
+  $("#tela-ok").classList.remove("hide");
+  window.scrollTo(0,0);
+}
+
+let enviando = false;
+async function esvaziarFila(){
+  if(enviando) return;
+  const fila = lerFila();
+  if(!fila.length) return;
+  enviando = true;
+  const restante = [];
+  for(const item of fila){
+    try{
+      const cupom = await mandar(item);
+      if(!$("#tela-fila").classList.contains("hide")) mostrarCupom(cupom, item.nome);
+    }catch(e){ restante.push(item); }
+  }
+  gravaFila(restante);
+  enviando = false;
+  if(restante.length && !$("#tela-fila").classList.contains("hide")){
+    $("#fila-estado").textContent = "Ainda sem conexão — vamos continuar tentando";
+  }
+}
+setInterval(esvaziarFila, 15000);
+window.addEventListener("online", esvaziarFila);
+document.addEventListener("visibilitychange", () => { if(!document.hidden) esvaziarFila(); });
+$("#fila-tentar").onclick = esvaziarFila;
+esvaziarFila();
+
 btn.onclick = async () => {
   const nome = titulo(inpNome.value), tel = digits(inpTel.value), cidade = titulo(inpCid.value);
   if(nome.length<3 || !nome.includes(" ")) return erro("Escreva o nome e o sobrenome.");
@@ -149,28 +266,19 @@ btn.onclick = async () => {
   if(!C.SUPABASE_URL || C.SUPABASE_URL.indexOf("COLE_AQUI")===0)
     return erro("O site ainda não foi configurado. Avise a equipe da loja.");
 
+  const item = { nome, tel, cidade,
+                 origem: new URLSearchParams(location.search).get("estande") ? "estande" : "qr" };
   btn.disabled = true; btn.textContent = "Enviando...";
   try{
-    const r = await fetch(C.SUPABASE_URL + "/rest/v1/rpc/cadastrar", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json", "apikey":C.SUPABASE_KEY,
-                "Authorization":"Bearer "+C.SUPABASE_KEY },
-      body: JSON.stringify({ p_nome:nome, p_telefone:tel, p_cidade:cidade,
-                             p_origem: new URLSearchParams(location.search).get("estande") ? "estande" : "qr" })
-    });
-    if(!r.ok) throw new Error("http "+r.status);
-    const cupom = await r.json();
-    const repetido = cupom < 0;
-    $("#ok-titulo").textContent = repetido ? "Você já está participando" : "Cupom registrado";
-    $("#ok-num").textContent = String(Math.abs(cupom)).padStart(4,"0");
-    $("#ok-nome").textContent = nome.split(" ")[0] + "!";
-    $("#ok-brinde").textContent = C.BRINDE ? "Concorrendo a " + C.BRINDE : "";
-    $("#ok-data").textContent = C.RESULTADO ? "Resultado: " + C.RESULTADO : "";
-    $("#tela-form").classList.add("hide");
-    $("#tela-ok").classList.remove("hide");
-    window.scrollTo(0,0);
+    mostrarCupom(await mandar(item), nome);
   }catch(e){
-    erro("Não consegui enviar agora. Confira a internet e toque de novo.");
+    /* sem internet: guarda e continua tentando sozinho */
+    const fila = lerFila(); fila.push(item); gravaFila(fila);
+    $("#fila-estado").textContent = "Tentando enviar...";
+    $("#tela-form").classList.add("hide");
+    $("#tela-fila").classList.remove("hide");
+    window.scrollTo(0,0);
+    setTimeout(esvaziarFila, 1500);
   }finally{
     btn.disabled = false; trava();
   }
@@ -180,23 +288,24 @@ $("#novo").onclick = () => {
   inpNome.value=""; inpTel.value=""; inpCid.value=""; chkOk.checked=false;
   [...chips.children].forEach(c=>c.setAttribute("aria-pressed","false"));
   $("#form-msg").className="msg err"; trava();
-  $("#tela-ok").classList.add("hide"); $("#tela-form").classList.remove("hide");
+  $("#tela-ok").classList.add("hide"); $("#tela-fila").classList.add("hide");
+  $("#tela-form").classList.remove("hide");
   inpNome.focus();
 };
 
 /* ---------- regulamento ---------- */
-const REGRAS = [
+const REGRAS = () => [
   "## 1. Quem promove",
-  "Brinde oferecido em conjunto por Aletrini Multimarcas (CNPJ 30.793.455/0001-72) e Kalil Automóveis, durante o " + (C.EVENTO||"feirão") + ", em Mogi Guaçu/SP.",
+  "Brinde oferecido em conjunto por Aletrini Multimarcas (CNPJ 30.793.455/0001-72) e Kalil Automóveis, durante o " + (CFG.evento||"feirão") + ", em Mogi Guaçu/SP.",
   "## 2. Quem pode participar",
   "Visitantes do feirão com 18 anos ou mais que preencherem o cadastro com nome, WhatsApp e cidade. Não podem participar sócios e funcionários das duas lojas, nem seus parentes de primeiro grau.",
   "## 3. Como participar",
   "O brinde é uma cortesia das lojas aos visitantes do feirão. A participação é gratuita e não depende de compra, contratação de serviço ou pagamento de qualquer valor. Cada pessoa tem direito a um único cupom, identificado pelo número de WhatsApp.",
   "## 4. O brinde",
-  (C.BRINDE ? C.BRINDE.charAt(0).toUpperCase()+C.BRINDE.slice(1) : "O brinde é divulgado pelas lojas no estande") + ". O brinde é pessoal, intransferível e não pode ser trocado por dinheiro.",
+  (CFG.brinde ? CFG.brinde.charAt(0).toUpperCase()+CFG.brinde.slice(1) : "O brinde é divulgado pelas lojas no estande") + ". O brinde é pessoal, intransferível e não pode ser trocado por dinheiro.",
   "As imagens usadas na divulgação são meramente ilustrativas: cor, modelo e embalagem do produto entregue podem ser diferentes dos das fotos.",
   "## 5. Como o ganhador é escolhido",
-  (C.RESULTADO || "A data, o horário e o local são divulgados no estande e nas redes sociais das lojas.") + " A escolha é feita por sistema eletrônico, na frente do público presente, entre todos os cupons válidos.",
+  (CFG.resultado || "A data, o horário e o local são divulgados no estande e nas redes sociais das lojas.") + " A escolha é feita por sistema eletrônico, na frente do público presente, entre todos os cupons válidos.",
   "## 6. Ganhador",
   "O ganhador é avisado pelo WhatsApp cadastrado em até 2 dias úteis. Para retirar o brinde, deve apresentar documento com foto na loja em até 30 dias corridos contados da data do resultado. Passado esse prazo sem retirada, um novo ganhador é escolhido entre os demais cupons.",
   "## 7. Uso dos dados",
@@ -208,7 +317,7 @@ const REGRAS = [
 $("#ver-regras").addEventListener("click", e => {
   e.preventDefault(); e.stopPropagation();
   const corpo = $("#regras-corpo"); corpo.innerHTML = "";
-  REGRAS.forEach(l => {
+  REGRAS().forEach(l => {
     const el = document.createElement(l.startsWith("## ") ? "h4" : "p");
     el.textContent = l.startsWith("## ") ? l.slice(3) : l;
     corpo.appendChild(el);
