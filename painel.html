@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Painel — Feirão Aletrini + Kalil</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+
+<div class="wrap hide" id="tela-login" style="justify-content:center">
+  <div class="logos" style="margin-bottom:8px">
+    <img class="logo on-light" src="img/aletrini.png" alt="Aletrini Multimarcas">
+    <img class="logo on-dark" src="img/aletrini-claro.png" alt="Aletrini Multimarcas">
+    <span class="logo-sep" aria-hidden="true"></span>
+    <img class="logo kalil on-light" src="img/kalil.png" alt="Kalil Automóveis">
+    <img class="logo kalil on-dark" src="img/kalil-claro.png" alt="Kalil Automóveis">
+  </div>
+  <div class="card" style="max-width:380px;margin:0 auto;width:100%">
+    <h2>Área da equipe</h2>
+    <div class="field">
+      <label for="lg-email">E-mail</label>
+      <input type="email" id="lg-email" autocomplete="username" enterkeyhint="next">
+    </div>
+    <div class="field">
+      <label for="lg-senha">Senha</label>
+      <input type="password" id="lg-senha" autocomplete="current-password" enterkeyhint="go">
+    </div>
+    <div class="msg err" id="lg-msg" role="alert"></div>
+    <button class="btn primary" id="lg-entrar">Entrar</button>
+  </div>
+</div>
+
+<div class="wrap wide hide" id="tela-painel">
+  <div class="row" style="align-items:center;justify-content:space-between">
+    <div style="flex:1 1 auto">
+      <div style="font-family:var(--f-display);font-style:italic;text-transform:uppercase;
+                  font-size:22px;letter-spacing:.05em">Painel</div>
+      <div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3)"
+           id="quem"></div>
+    </div>
+    <button class="btn ghost" id="sair" style="flex:none">Sair</button>
+  </div>
+  <div class="tabs" id="tabs" role="tablist"></div>
+  <div id="painel"></div>
+  <p class="foot">Os cadastros ficam no banco de dados, não neste aparelho.
+     A lista atualiza sozinha a cada 30 segundos.</p>
+</div>
+
+<script src="config.js"></script>
+<script>
+"use strict";
+const C = window.CONFIG || {};
+const $ = s => document.querySelector(s);
+const el = (t,c,x) => { const n=document.createElement(t); if(c)n.className=c; if(x!=null)n.textContent=x; return n; };
+const digits = s => (s||"").replace(/\D/g,"");
+const pad4 = n => String(n).padStart(4,"0");
+function maskTel(v){
+  const d = digits(v);
+  if(d.length<=10) return "("+d.slice(0,2)+") "+d.slice(2,6)+"-"+d.slice(6);
+  return "("+d.slice(0,2)+") "+d.slice(2,7)+"-"+d.slice(7);
+}
+function dataHora(iso){
+  const d = new Date(iso), p = n => String(n).padStart(2,"0");
+  return p(d.getDate())+"/"+p(d.getMonth()+1)+"/"+d.getFullYear()+" "+p(d.getHours())+":"+p(d.getMinutes());
+}
+
+/* ---------------- sessão ---------------- */
+let sessao = JSON.parse(sessionStorage.getItem("feirao_sessao") || "null");
+let papel = "nenhum";
+let leads = [], ganhadores = [];
+
+const api = async (caminho, opcoes = {}) => {
+  const h = Object.assign({
+    "apikey": C.SUPABASE_KEY,
+    "Content-Type": "application/json"
+  }, opcoes.headers || {});
+  if(sessao && sessao.access_token) h["Authorization"] = "Bearer " + sessao.access_token;
+  const r = await fetch(C.SUPABASE_URL + caminho, Object.assign({}, opcoes, {headers: h}));
+  if(r.status === 401){ deslogar(); throw new Error("sessao expirada"); }
+  if(!r.ok) throw new Error(await r.text());
+  return r.status === 204 ? null : r.json();
+};
+
+function deslogar(){
+  sessao = null; sessionStorage.removeItem("feirao_sessao");
+  $("#tela-painel").classList.add("hide");
+  $("#tela-login").classList.remove("hide");
+}
+
+$("#lg-entrar").onclick = entrar;
+$("#lg-email").addEventListener("keydown", e => { if(e.key==="Enter") $("#lg-senha").focus(); });
+$("#lg-senha").addEventListener("keydown", e => { if(e.key==="Enter") entrar(); });
+
+async function entrar(){
+  const m = $("#lg-msg");
+  m.className = "msg err";
+  if(!C.SUPABASE_URL || C.SUPABASE_URL.indexOf("COLE_AQUI")===0){
+    m.textContent = "O site ainda não foi configurado (config.js)."; m.className="msg err on"; return;
+  }
+  const btn = $("#lg-entrar"); btn.disabled = true; btn.textContent = "Entrando...";
+  try{
+    const r = await fetch(C.SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+      method:"POST",
+      headers:{ "apikey": C.SUPABASE_KEY, "Content-Type":"application/json" },
+      body: JSON.stringify({ email: $("#lg-email").value.trim(), password: $("#lg-senha").value })
+    });
+    if(!r.ok) throw new Error("login");
+    sessao = await r.json();
+    sessionStorage.setItem("feirao_sessao", JSON.stringify(sessao));
+    $("#lg-senha").value = "";
+    await abrirPainel();
+  }catch(e){
+    m.textContent = "E-mail ou senha incorretos."; m.className = "msg err on";
+  }finally{
+    btn.disabled = false; btn.textContent = "Entrar";
+  }
+}
+$("#sair").onclick = deslogar;
+
+/* ---------------- carregar ---------------- */
+async function abrirPainel(){
+  try{
+    papel = await api("/rest/v1/rpc/meu_papel", {method:"POST", body:"{}"});
+  }catch(e){ papel = "nenhum"; }
+  if(papel === "nenhum"){
+    $("#lg-msg").textContent = "Este e-mail ainda não tem acesso liberado ao painel.";
+    $("#lg-msg").className = "msg err on";
+    deslogar(); return;
+  }
+  const eu = sessao.user && sessao.user.email ? sessao.user.email : "";
+  $("#quem").textContent = eu + " · " + papel;
+  $("#tela-login").classList.add("hide");
+  $("#tela-painel").classList.remove("hide");
+  montaAbas();
+  await carregar();
+}
+const master = () => papel === "master";
+
+async function carregar(){
+  leads = await api("/rest/v1/leads?select=*&order=cupom.desc");
+  ganhadores = await api("/rest/v1/ganhadores?select=*,leads(cupom,nome,cidade,telefone)&order=criado_em.desc");
+  render();
+}
+setInterval(() => { if(sessao) carregar().catch(()=>{}); }, 30000);
+
+/* ---------------- abas ---------------- */
+const ABAS = [["resumo","Resumo"],["lista","Cadastros"],["brinde","Brinde"]];
+let aba = "resumo";
+function montaAbas(){
+  const host = $("#tabs"); host.innerHTML = "";
+  ABAS.forEach(([id,nome])=>{
+    const b = el("button","tab",nome); b.type="button"; b.setAttribute("role","tab");
+    b.setAttribute("aria-selected", String(id===aba));
+    b.onclick = () => { aba = id; montaAbas(); render(); };
+    host.appendChild(b);
+  });
+}
+function render(){
+  const p = $("#painel"); p.innerHTML = "";
+  ({resumo:vResumo, lista:vLista, brinde:vBrinde})[aba](p);
+}
+
+/* ---------------- exportar ---------------- */
+function csv(){
+  const cab = ["Cupom","Nome","WhatsApp","Cidade","Origem","Data e hora","Autorizou contato"];
+  const linhas = leads.slice().sort((a,b)=>a.cupom-b.cupom).map(l =>
+    [pad4(l.cupom), l.nome, maskTel(l.telefone), l.cidade,
+     l.origem === "qr" ? "QR code" : "Estande", dataHora(l.criado_em), l.consent ? "Sim" : "Nao"]);
+  const esc = v => '"' + String(v).replace(/"/g,'""') + '"';
+  return "﻿" + [cab, ...linhas].map(l => l.map(esc).join(";")).join("\r\n");
+}
+function baixarCsv(){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv()], {type:"text/csv;charset=utf-8"}));
+  a.download = "cadastros-feirao.csv";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 4000);
+}
+
+/* ---------------- resumo ---------------- */
+function vResumo(p){
+  const c = el("div","card");
+  c.appendChild(el("h2",null,"Resumo do feirão"));
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const doDia = leads.filter(l => new Date(l.criado_em) >= hoje).length;
+  const hora  = leads.filter(l => new Date(l.criado_em) >= Date.now()-3600e3).length;
+  const porQr = leads.filter(l => l.origem === "qr").length;
+
+  const g = el("div","grid");
+  [[leads.length,"Cupons no total"],[doDia,"Cadastros hoje"],[hora,"Na última hora"],[porQr,"Pelo QR code"]]
+    .forEach(([v,t])=>{ const s = el("div","stat"); s.appendChild(el("b",null,String(v)));
+                        s.appendChild(el("span",null,t)); g.appendChild(s); });
+  c.appendChild(g);
+
+  if(leads.length){
+    c.appendChild(el("h3",null,"Cadastros por cidade"));
+    const cont = {};
+    leads.forEach(l => cont[l.cidade] = (cont[l.cidade]||0)+1);
+    const ord = Object.entries(cont).sort((a,b)=>b[1]-a[1]).slice(0,6), max = ord[0][1];
+    const bars = el("div","bars");
+    ord.forEach(([cid,q])=>{
+      const b = el("div","bar");
+      b.appendChild(el("span",null,cid)); b.appendChild(el("b",null,String(q)));
+      const i = el("i"); i.style.width = Math.round(q/max*100)+"%"; b.appendChild(i);
+      bars.appendChild(b);
+    });
+    c.appendChild(bars);
+    const exp = el("button","btn primary","Exportar todos os cadastros (.csv)");
+    exp.onclick = baixarCsv; c.appendChild(exp);
+  } else {
+    c.appendChild(el("p","sub","Nenhum cadastro ainda."));
+  }
+  p.appendChild(c);
+}
+
+/* ---------------- lista ---------------- */
+let busca = "";
+function vLista(p){
+  const c = el("div","card");
+  c.appendChild(el("h2",null,"Cadastros (" + leads.length + ")"));
+  const b = document.createElement("input");
+  b.type = "text"; b.placeholder = "Buscar por nome, telefone ou cidade"; b.value = busca;
+  b.oninput = () => { busca = b.value; tabela(); };
+  c.appendChild(b);
+  const exp = el("button","btn","Exportar todos os cadastros (.csv)");
+  exp.onclick = baixarCsv; c.appendChild(exp);
+  const wrap = el("div","tablewrap"); c.appendChild(wrap); p.appendChild(c);
+
+  function tabela(){
+    const q = busca.trim().toLowerCase();
+    const lista = leads.filter(l => !q || l.nome.toLowerCase().includes(q)
+                   || l.telefone.includes(digits(q)) || l.cidade.toLowerCase().includes(q));
+    wrap.innerHTML = "";
+    if(!lista.length){ wrap.style.padding="14px"; wrap.appendChild(el("p","sub","Nada encontrado.")); return; }
+    wrap.style.padding = "0";
+    const t = document.createElement("table"), thead = document.createElement("thead"),
+          hr = document.createElement("tr");
+    ["Cupom","Nome","WhatsApp","Cidade","Origem","Horário", master()?"":""].forEach(h=>{
+      const th = document.createElement("th"); th.textContent = h; hr.appendChild(th); });
+    thead.appendChild(hr); t.appendChild(thead);
+    const tb = document.createElement("tbody");
+    lista.forEach(l => {
+      const tr = document.createElement("tr");
+      const add = (txt,cls) => { const td=document.createElement("td"); if(cls)td.className=cls;
+                                 td.textContent=txt; tr.appendChild(td); };
+      add(pad4(l.cupom),"n"); add(l.nome); add(maskTel(l.telefone),"tel"); add(l.cidade);
+      add(l.origem === "qr" ? "QR" : "Estande"); add(dataHora(l.criado_em));
+      const td = document.createElement("td");
+      if(master()){
+        const x = el("button","btn danger","Excluir");
+        x.style.padding="4px 10px"; x.style.fontSize="12px";
+        x.onclick = async () => {
+          if(!confirm("Excluir o cadastro de " + l.nome + "?")) return;
+          await api("/rest/v1/leads?id=eq." + l.id, {method:"DELETE"});
+          await carregar();
+        };
+        td.appendChild(x);
+      }
+      tr.appendChild(td); tb.appendChild(tr);
+    });
+    t.appendChild(tb); wrap.appendChild(t);
+  }
+  tabela();
+}
+
+/* ---------------- brinde ---------------- */
+let sorteando = false;
+function vBrinde(p){
+  const c = el("div","card");
+  c.appendChild(el("h2",null,"Brinde" + (C.BRINDE ? " — " + C.BRINDE : "")));
+  const jaGanhou = new Set(ganhadores.map(g => g.lead_id));
+  const pool = leads.filter(l => !jaGanhou.has(l.id));
+  c.appendChild(el("p","sub", pool.length + " cupons participando" +
+    (ganhadores.length ? " (ganhadores anteriores fora)" : "") + "."));
+
+  const box = el("div","draw");
+  const roll = el("div","roll","0000"), nome = el("div","name","Pronto para escolher");
+  box.appendChild(roll); box.appendChild(nome); c.appendChild(box);
+
+  if(master()){
+    const btn = el("button","btn primary big","Escolher ganhador");
+    btn.onclick = () => {
+      if(sorteando) return;
+      if(pool.length < 2){ alert("É preciso ter pelo menos 2 cupons participando."); return; }
+      sorteando = true; btn.disabled = true;
+      const escolhido = pool[Math.floor(Math.random()*pool.length)];
+      const reduz = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const dur = reduz ? 0 : 2400, t0 = performance.now();
+      const fim = async () => {
+        roll.textContent = pad4(escolhido.cupom);
+        nome.textContent = escolhido.nome;
+        try{
+          await api("/rest/v1/ganhadores", {method:"POST",
+            body: JSON.stringify({ lead_id: escolhido.id, brinde: C.BRINDE || null })});
+          await carregar();
+        }catch(e){ alert("Não consegui registrar o ganhador. Confira a internet e tente de novo."); }
+        sorteando = false;
+      };
+      if(reduz){ fim(); return; }
+      (function tick(t){
+        const k = (t-t0)/dur;
+        if(k >= 1){ fim(); return; }
+        roll.textContent = pad4(pool[Math.floor(Math.random()*pool.length)].cupom);
+        nome.textContent = "Escolhendo...";
+        setTimeout(()=>requestAnimationFrame(tick), 40 + k*k*260);
+      })(performance.now());
+    };
+    c.appendChild(btn);
+  } else {
+    c.appendChild(el("p","sub","Seu acesso é de consulta: você acompanha o resultado, mas não escolhe o ganhador."));
+  }
+  p.appendChild(c);
+
+  const g = el("div","card"); g.style.marginTop = "14px";
+  g.appendChild(el("h2",null,"Ganhadores"));
+  if(!ganhadores.length) g.appendChild(el("p","sub","Nenhum ganhador escolhido ainda."));
+  ganhadores.forEach(w => {
+    const l = w.leads || {};
+    const r = el("div","win"), esq = el("div");
+    esq.appendChild(el("div",null,(l.nome||"—") + " — " + (l.cidade||"")));
+    const s = el("small"); s.style.color = "var(--text-3)";
+    s.textContent = "Cupom " + pad4(l.cupom||0) + " · " + dataHora(w.criado_em) + (w.brinde ? " · " + w.brinde : "");
+    esq.appendChild(s); r.appendChild(esq);
+    const dir = el("div","row"); dir.style.flex="none"; dir.style.gap="6px";
+    const tel = el("button","btn ghost","Ver WhatsApp");
+    tel.style.padding="4px 10px"; tel.style.fontSize="12px"; tel.style.flex="none";
+    tel.onclick = () => { tel.textContent = maskTel(l.telefone||""); tel.onclick = null; };
+    dir.appendChild(tel);
+    if(master()){
+      const x = el("button","btn danger","Anular");
+      x.style.padding="4px 10px"; x.style.fontSize="12px"; x.style.flex="none";
+      x.onclick = async () => {
+        if(!confirm("Anular este resultado?")) return;
+        await api("/rest/v1/ganhadores?id=eq." + w.id, {method:"DELETE"});
+        await carregar();
+      };
+      dir.appendChild(x);
+    }
+    r.appendChild(dir); g.appendChild(r);
+  });
+  p.appendChild(g);
+}
+
+/* ---------------- início ---------------- */
+if(sessao) abrirPainel().catch(deslogar);
+else deslogar();
+</script>
+</body>
+</html>

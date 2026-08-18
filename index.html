@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Feirão Aletrini + Kalil — cupom do brinde</title>
+<meta name="description" content="Cadastre-se e concorra ao brinde do feirão. Leva dez segundos.">
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+
+<div class="wrap" id="tela-form">
+  <div class="logos">
+    <img class="logo on-light" src="img/aletrini.png" alt="Aletrini Multimarcas">
+    <img class="logo on-dark" src="img/aletrini-claro.png" alt="Aletrini Multimarcas">
+    <span class="logo-sep" aria-hidden="true"></span>
+    <img class="logo kalil on-light" src="img/kalil.png" alt="Kalil Automóveis">
+    <img class="logo kalil on-dark" src="img/kalil-claro.png" alt="Kalil Automóveis">
+  </div>
+
+  <div class="ticket">
+    <div class="ticket-head">
+      <div class="eyebrow" id="ev-label">Feirão</div>
+      <h1 id="ev-title">Concorra ao brinde</h1>
+      <p class="sub">Preencha e leve seu número da sorte.</p>
+    </div>
+    <div class="prize hide" id="prize-box">
+      <div class="prize-txt">
+        <span>Brinde do feirão</span>
+        <strong id="prize-name"></strong>
+      </div>
+    </div>
+    <div class="ticket-body">
+      <div class="field">
+        <label for="f-nome">Nome completo</label>
+        <input type="text" id="f-nome" autocomplete="name" autocapitalize="words"
+               placeholder="Ex.: Maria Aparecida Souza" enterkeyhint="next">
+      </div>
+      <div class="field">
+        <label for="f-tel">WhatsApp com DDD</label>
+        <input type="tel" id="f-tel" inputmode="numeric" autocomplete="tel"
+               placeholder="(19) 99999-9999" enterkeyhint="next">
+      </div>
+      <div class="field">
+        <label for="f-cid">Cidade</label>
+        <div class="chips" id="cid-chips"></div>
+        <input type="text" id="f-cid" autocomplete="address-level2" autocapitalize="words"
+               placeholder="Digite sua cidade" enterkeyhint="done">
+      </div>
+      <label class="consent">
+        <input type="checkbox" id="f-ok">
+        <span>Li e aceito os <button type="button" class="link" id="ver-regras">termos e condições</button>.</span>
+      </label>
+      <div class="msg err" id="form-msg" role="alert"></div>
+      <button class="btn primary big" id="send" disabled>Marque a autorização</button>
+    </div>
+  </div>
+  <p class="foot">Seus dados são usados apenas para a entrega do brinde e para contato da Aletrini Multimarcas
+    e da Kalil Automóveis.<br>Você pode pedir a exclusão a qualquer momento.</p>
+</div>
+
+<div class="wrap hide" id="tela-ok" style="align-items:center;justify-content:center">
+  <div class="stub anim">
+    <div class="eyebrow" id="ok-titulo">Cupom registrado</div>
+    <div class="num" id="ok-num">0000</div>
+    <div class="who" id="ok-nome">—</div>
+    <div class="seal">Você está concorrendo</div>
+    <p class="sub" id="ok-brinde"></p>
+    <p class="sub" id="ok-data"></p>
+  </div>
+  <p class="sub" style="text-align:center">Guarde seu número. O ganhador é avisado pelo WhatsApp.</p>
+  <button class="btn ghost" id="novo">Cadastrar outra pessoa</button>
+</div>
+
+<div class="overlay hide" id="regras" role="dialog" aria-modal="true">
+  <div class="sheet">
+    <div class="sheet-topo">
+      <h2>Regulamento do brinde</h2>
+      <button class="btn ghost" id="fecha-regras">Fechar</button>
+    </div>
+    <div class="sheet-corpo" id="regras-corpo"></div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script>
+"use strict";
+const C = window.CONFIG || {};
+const $ = s => document.querySelector(s);
+const CIDADES = ["Mogi Guaçu","Mogi Mirim","Estiva Gerbi","Itapira"];
+
+const digits = s => (s||"").replace(/\D/g,"");
+const titulo = s => (s||"").trim().toLowerCase().replace(/\s+/g," ")
+  .replace(/(^|\s|')([a-zà-ú])/g,(m,a,b)=>a+b.toUpperCase())
+  .replace(/\b(Da|De|Do|Das|Dos|E)\b/g,m=>m.toLowerCase());
+function maskTel(v){
+  const d = digits(v).slice(0,11);
+  if(d.length<=2) return d.length?"("+d:"";
+  if(d.length<=6) return "("+d.slice(0,2)+") "+d.slice(2);
+  if(d.length<=10) return "("+d.slice(0,2)+") "+d.slice(2,6)+"-"+d.slice(6);
+  return "("+d.slice(0,2)+") "+d.slice(2,7)+"-"+d.slice(7);
+}
+
+$("#ev-label").textContent = C.EVENTO || "Feirão";
+$("#ev-title").textContent = C.TITULO || "Concorra ao brinde";
+if(C.BRINDE){ $("#prize-box").classList.remove("hide"); $("#prize-name").textContent = C.BRINDE; }
+
+const chips = $("#cid-chips"), inpCid = $("#f-cid"), inpTel = $("#f-tel"),
+      inpNome = $("#f-nome"), chkOk = $("#f-ok"), btn = $("#send");
+
+CIDADES.forEach(c=>{
+  const b = document.createElement("button");
+  b.type="button"; b.className="chip"; b.textContent=c; b.setAttribute("aria-pressed","false");
+  b.onclick = () => {
+    const ativo = b.getAttribute("aria-pressed")==="true";
+    [...chips.children].forEach(x=>x.setAttribute("aria-pressed","false"));
+    b.setAttribute("aria-pressed", String(!ativo));
+    inpCid.value = ativo ? "" : c;
+  };
+  chips.appendChild(b);
+});
+inpCid.addEventListener("input", () => {
+  [...chips.children].forEach(c=>c.setAttribute("aria-pressed",
+    String(c.textContent.toLowerCase()===inpCid.value.trim().toLowerCase())));
+});
+inpTel.addEventListener("input", e => { e.target.value = maskTel(e.target.value); });
+[inpNome,inpTel,inpCid].forEach((f,i,arr)=>{
+  f.addEventListener("keydown", e => {
+    if(e.key==="Enter"){ e.preventDefault(); if(arr[i+1]) arr[i+1].focus(); else btn.click(); }
+  });
+});
+function trava(){
+  btn.disabled = !chkOk.checked;
+  btn.textContent = chkOk.checked ? "Quero participar" : "Marque a autorização";
+  chkOk.closest(".consent").classList.toggle("on", chkOk.checked);
+}
+chkOk.addEventListener("change", () => { trava(); $("#form-msg").className="msg err"; });
+trava();
+
+function erro(t){ const m=$("#form-msg"); m.textContent=t; m.className="msg err on"; }
+
+btn.onclick = async () => {
+  const nome = titulo(inpNome.value), tel = digits(inpTel.value), cidade = titulo(inpCid.value);
+  if(nome.length<3 || !nome.includes(" ")) return erro("Escreva o nome e o sobrenome.");
+  if(tel.length<10 || tel.length>11)       return erro("Confira o WhatsApp: precisa ter DDD + número.");
+  if(cidade.length<3)                      return erro("Informe a cidade.");
+  if(!chkOk.checked)                       return erro("Marque a autorização para participar.");
+  if(!C.SUPABASE_URL || C.SUPABASE_URL.indexOf("COLE_AQUI")===0)
+    return erro("O site ainda não foi configurado. Avise a equipe da loja.");
+
+  btn.disabled = true; btn.textContent = "Enviando...";
+  try{
+    const r = await fetch(C.SUPABASE_URL + "/rest/v1/rpc/cadastrar", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "apikey":C.SUPABASE_KEY,
+                "Authorization":"Bearer "+C.SUPABASE_KEY },
+      body: JSON.stringify({ p_nome:nome, p_telefone:tel, p_cidade:cidade,
+                             p_origem: new URLSearchParams(location.search).get("estande") ? "estande" : "qr" })
+    });
+    if(!r.ok) throw new Error("http "+r.status);
+    const cupom = await r.json();
+    const repetido = cupom < 0;
+    $("#ok-titulo").textContent = repetido ? "Você já está participando" : "Cupom registrado";
+    $("#ok-num").textContent = String(Math.abs(cupom)).padStart(4,"0");
+    $("#ok-nome").textContent = nome.split(" ")[0] + "!";
+    $("#ok-brinde").textContent = C.BRINDE ? "Concorrendo a " + C.BRINDE : "";
+    $("#ok-data").textContent = C.RESULTADO ? "Resultado: " + C.RESULTADO : "";
+    $("#tela-form").classList.add("hide");
+    $("#tela-ok").classList.remove("hide");
+    window.scrollTo(0,0);
+  }catch(e){
+    erro("Não consegui enviar agora. Confira a internet e toque de novo.");
+  }finally{
+    btn.disabled = false; trava();
+  }
+};
+
+$("#novo").onclick = () => {
+  inpNome.value=""; inpTel.value=""; inpCid.value=""; chkOk.checked=false;
+  [...chips.children].forEach(c=>c.setAttribute("aria-pressed","false"));
+  $("#form-msg").className="msg err"; trava();
+  $("#tela-ok").classList.add("hide"); $("#tela-form").classList.remove("hide");
+  inpNome.focus();
+};
+
+/* ---------- regulamento ---------- */
+const REGRAS = [
+  "## 1. Quem promove",
+  "Brinde oferecido em conjunto por Aletrini Multimarcas (CNPJ 30.793.455/0001-72) e Kalil Automóveis, durante o " + (C.EVENTO||"feirão") + ", em Mogi Guaçu/SP.",
+  "## 2. Quem pode participar",
+  "Visitantes do feirão com 18 anos ou mais que preencherem o cadastro com nome, WhatsApp e cidade. Não podem participar sócios e funcionários das duas lojas, nem seus parentes de primeiro grau.",
+  "## 3. Como participar",
+  "O brinde é uma cortesia das lojas aos visitantes do feirão. A participação é gratuita e não depende de compra, contratação de serviço ou pagamento de qualquer valor. Cada pessoa tem direito a um único cupom, identificado pelo número de WhatsApp.",
+  "## 4. O brinde",
+  (C.BRINDE ? C.BRINDE.charAt(0).toUpperCase()+C.BRINDE.slice(1) : "O brinde é divulgado pelas lojas no estande") + ". O brinde é pessoal, intransferível e não pode ser trocado por dinheiro.",
+  "As imagens usadas na divulgação são meramente ilustrativas: cor, modelo e embalagem do produto entregue podem ser diferentes dos das fotos.",
+  "## 5. Como o ganhador é escolhido",
+  (C.RESULTADO || "A data, o horário e o local são divulgados no estande e nas redes sociais das lojas.") + " A escolha é feita por sistema eletrônico, na frente do público presente, entre todos os cupons válidos.",
+  "## 6. Ganhador",
+  "O ganhador é avisado pelo WhatsApp cadastrado em até 2 dias úteis. Para retirar o brinde, deve apresentar documento com foto na loja em até 30 dias corridos contados da data do resultado. Passado esse prazo sem retirada, um novo ganhador é escolhido entre os demais cupons.",
+  "## 7. Uso dos dados",
+  "Os dados informados (nome, WhatsApp e cidade) são usados para identificar e avisar o ganhador do brinde e para contato comercial da Aletrini Multimarcas e da Kalil Automóveis sobre veículos, condições e ofertas. Os dados não são vendidos nem repassados a terceiros.",
+  "Você pode pedir a exclusão dos seus dados a qualquer momento pelo WhatsApp " + maskTel(C.WHATSAPP_LOJA||"") + ", conforme a Lei Geral de Proteção de Dados (Lei 13.709/2018).",
+  "## 8. Aceite",
+  "Ao marcar a autorização e enviar o cadastro, o participante declara que leu e concorda com este regulamento."
+];
+$("#ver-regras").addEventListener("click", e => {
+  e.preventDefault(); e.stopPropagation();
+  const corpo = $("#regras-corpo"); corpo.innerHTML = "";
+  REGRAS.forEach(l => {
+    const el = document.createElement(l.startsWith("## ") ? "h4" : "p");
+    el.textContent = l.startsWith("## ") ? l.slice(3) : l;
+    corpo.appendChild(el);
+  });
+  $("#regras").classList.remove("hide"); corpo.scrollTop = 0;
+});
+$("#fecha-regras").onclick = () => $("#regras").classList.add("hide");
+$("#regras").addEventListener("click", e => { if(e.target.id==="regras") $("#regras").classList.add("hide"); });
+document.addEventListener("keydown", e => { if(e.key==="Escape") $("#regras").classList.add("hide"); });
+</script>
+</body>
+</html>
