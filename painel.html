@@ -88,10 +88,18 @@ async function renovar(){
   }catch(e){ return false; }
 }
 
+function comPrazo(promessa, ms, oQue){
+  return Promise.race([
+    promessa,
+    new Promise((_, rejeita) => setTimeout(() => rejeita(new Error("demorou demais: " + oQue)), ms))
+  ]);
+}
+
 async function api(caminho, opcoes = {}, jaTentou){
   const h = Object.assign({ "apikey": C.SUPABASE_KEY, "Content-Type": "application/json" }, opcoes.headers || {});
   if(sessao && sessao.access_token) h["Authorization"] = "Bearer " + sessao.access_token;
-  const r = await fetch(C.SUPABASE_URL + caminho, Object.assign({}, opcoes, {headers: h}));
+  const r = await comPrazo(fetch(C.SUPABASE_URL + caminho, Object.assign({}, opcoes, {headers: h})),
+                           15000, caminho.split("?")[0]);
   if(r.status === 401 && !jaTentou){
     if(await renovar()) return api(caminho, opcoes, true);
     deslogar(); throw new Error("sessao expirada");
@@ -117,25 +125,29 @@ async function entrar(){
   }
   const btn = $("#lg-entrar"); btn.disabled = true; btn.textContent = "Entrando...";
   try{
-    const r = await fetch(C.SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+    const r = await comPrazo(fetch(C.SUPABASE_URL + "/auth/v1/token?grant_type=password", {
       method:"POST", headers:{ "apikey": C.SUPABASE_KEY, "Content-Type":"application/json" },
       body: JSON.stringify({ email: $("#lg-email").value.trim(), password: $("#lg-senha").value })
-    });
-    if(!r.ok) throw new Error("login");
+    }), 15000, "login");
+    if(r.status === 400 || r.status === 401) throw new Error("credenciais");
+    if(!r.ok) throw new Error("servidor respondeu " + r.status);
     sessao = await r.json();
     sessionStorage.setItem("feirao_sessao", JSON.stringify(sessao));
     $("#lg-senha").value = "";
     await abrirPainel();
   }catch(e){
-    m.textContent = "E-mail ou senha incorretos."; m.className = "msg err on";
+    m.className = "msg err on";
+    if(e.message === "credenciais") m.textContent = "E-mail ou senha incorretos.";
+    else if(/demorou|Failed|NetworkError|network/i.test(e.message))
+      m.textContent = "A conexão está lenta e o login não completou. Toque em Entrar de novo.";
+    else m.textContent = "Não consegui entrar agora: " + e.message;
   }finally{ btn.disabled = false; btn.textContent = "Entrar"; }
 }
 $("#sair").onclick = deslogar;
 
 /* ---------------- carregar ---------------- */
 async function abrirPainel(){
-  try{ papel = await api("/rest/v1/rpc/meu_papel", {method:"POST", body:"{}"}); }
-  catch(e){ papel = "nenhum"; }
+  papel = await api("/rest/v1/rpc/meu_papel", {method:"POST", body:"{}"});
   if(papel === "nenhum"){
     $("#lg-msg").textContent = "Este e-mail ainda não tem acesso liberado ao painel.";
     $("#lg-msg").className = "msg err on"; deslogar(); return;
@@ -143,7 +155,20 @@ async function abrirPainel(){
   $("#quem").textContent = ((sessao.user && sessao.user.email) || "") + " · " + papel;
   $("#tela-login").classList.add("hide");
   $("#tela-painel").classList.remove("hide");
-  montaAbas(); await carregar();
+  montaAbas();
+  $("#painel").innerHTML = "";
+  const carregando = el("div","card");
+  carregando.appendChild(el("p","sub","Carregando os cadastros..."));
+  $("#painel").appendChild(carregando);
+  /* o painel já está na tela; os dados entram assim que chegam */
+  carregar().catch(e => {
+    $("#painel").innerHTML = "";
+    const err = el("div","card");
+    const m = el("div","msg err on");
+    m.textContent = "Não consegui carregar os cadastros: " + e.message +
+      ". Toque em Sair e entre de novo, ou confira a internet.";
+    err.appendChild(m); $("#painel").appendChild(err);
+  });
 }
 const master = () => papel === "master";
 
@@ -153,9 +178,13 @@ async function carregarConfig(){
   CFG = {}; linhas.forEach(l => CFG[l.chave] = l.valor);
 }
 async function carregar(){
-  try{ await carregarConfig(); }catch(e){ CFG = CFG || {}; }
-  leads = await api("/rest/v1/leads?select=*&order=cupom.desc");
-  ganhadores = await api("/rest/v1/ganhadores?select=*,leads(cupom,nome,cidade,telefone)&order=criado_em.desc");
+  const [cfg, ls, gs] = await Promise.all([
+    api("/rest/v1/config?select=chave,valor").catch(()=>null),
+    api("/rest/v1/leads?select=*&order=cupom.desc"),
+    api("/rest/v1/ganhadores?select=*,leads(cupom,nome,cidade,telefone)&order=criado_em.desc").catch(()=>[])
+  ]);
+  if(cfg){ CFG = {}; cfg.forEach(l => CFG[l.chave] = l.valor); }
+  leads = ls; ganhadores = gs;
   temStatus = !leads.length || leads[0].status !== undefined;
   ultimaCarga = Date.now();
   render();
